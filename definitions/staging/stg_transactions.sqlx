@@ -1,0 +1,70 @@
+config {
+  type: "view",
+  schema: "staging",
+  name: "stg_transactions",
+  description: "Staging layer - type casting, cleaning, deduplication. No business logic here.",
+  columns: {
+    trans_num: "Unique transaction identifier (Primary Key)",
+    trans_timestamp: "Date and time of the transaction",
+    trans_hour: "Hour of day (0-23) extracted from trans_timestamp",
+    trans_day_of_week: "Day of week (1=Sunday, 7=Saturday) extracted from trans_timestamp",
+    merchant: "Merchant name, trimmed",
+    category: "Transaction category, lowercase",
+    amount: "Transaction amount",
+    customer_city: "Customer's city",
+    customer_state: "Customer's state",
+    customer_lat: "Customer's raw latitude",
+    customer_long: "Customer's raw longitude",
+    customer_location: "Customer GEOGRAPHY point, built from lat/long",
+    merchant_lat: "Merchant's raw latitude",
+    merchant_long: "Merchant's raw longitude",
+    merchant_location: "Merchant GEOGRAPHY point, built from lat/long",
+    city_population: "Population of customer's city",
+    customer_job: "Customer's job title",
+    customer_dob: "Customer's date of birth",
+    customer_age: "Customer age at the time of the transaction, derived from dob",
+    is_fraud: "1 = fraud, 0 = legitimate transaction"
+  }
+}
+
+WITH deduplicated AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (
+      PARTITION BY trans_num
+      ORDER BY trans_date_trans_time
+    ) AS row_num
+  FROM ${ref("transactions_raw_file")}
+)
+
+SELECT
+  TRIM(trans_num)                                AS trans_num,
+  trans_date_trans_time                          AS trans_timestamp,
+  EXTRACT(HOUR FROM trans_date_trans_time)        AS trans_hour,
+  EXTRACT(DAYOFWEEK FROM trans_date_trans_time)   AS trans_day_of_week,
+  TRIM(merchant)                                  AS merchant,
+  LOWER(TRIM(category))                           AS category,
+  CAST(amt AS NUMERIC)                            AS amount,
+  city                                            AS customer_city,
+  state                                           AS customer_state,
+  lat                                             AS customer_lat,
+  long                                            AS customer_long,
+  ST_GEOGPOINT(long, lat)                         AS customer_location,
+  merch_lat                                       AS merchant_lat,
+  merch_long                                      AS merchant_long,
+  ST_GEOGPOINT(merch_long, merch_lat)             AS merchant_location,
+  city_pop                                        AS city_population,
+  job                                             AS customer_job,
+  dob                                             AS customer_dob,
+  -- Exact age at the time of the transaction
+  DATE_DIFF(DATE(trans_date_trans_time), dob, YEAR)
+    - IF(
+        EXTRACT(MONTH FROM dob) * 100 + EXTRACT(DAY FROM dob)
+        > EXTRACT(MONTH FROM DATE(trans_date_trans_time)) * 100 + EXTRACT(DAY FROM DATE(trans_date_trans_time)),
+        1, 0
+      )                                           AS customer_age,
+
+  is_fraud                                        AS is_fraud
+
+FROM deduplicated
+WHERE row_num = 1

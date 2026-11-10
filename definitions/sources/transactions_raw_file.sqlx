@@ -1,0 +1,7 @@
+config {
+  type: "declaration",
+  database: "fraud-detection-project-2026",
+  schema: "raw",
+  name: "transactions_raw_file",
+  description: "Raw source table – credit card transactions, manually uploaded from a CSV file"
+}

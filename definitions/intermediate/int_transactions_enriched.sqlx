@@ -1,0 +1,98 @@
+config {
+  type: "table",
+  schema: "intermediate",
+  name: "int_transactions_enriched",
+  description: "Intermediate layer - feature engineering: distance, time flags, risk scores (leave-one-out encoded), z-scores by category/merchant",
+  bigquery: {
+    partitionBy: "DATE(trans_timestamp)",
+    clusterBy: ["category"]
+  },
+  columns: {
+    trans_num: "Unique transaction identifier (Primary Key)",
+    trans_timestamp: "Date and time of the transaction",
+    trans_hour: "Hour of day (0-23)",
+    trans_day_of_week: "Day of week (1=Sunday, 7=Saturday)",
+    is_weekend: "1 if transaction occurred on Friday or Saturday, else 0",
+    is_night: "1 if transaction occurred between 22:00-06:00, else 0",
+    merchant: "Merchant name",
+    category: "Transaction category",
+    amount: "Transaction amount",
+    customer_city: "Customer's city",
+    customer_state: "Customer's state",
+    customer_location: "Customer GEOGRAPHY point",
+    merchant_location: "Merchant GEOGRAPHY point",
+    distance_km: "Distance in km between customer and merchant location",
+    city_population: "Population of customer's city",
+    customer_job: "Customer's job title",
+    customer_age: "Customer age at the time of the transaction",
+    customer_age_group: "Age bucket: 18-25, 26-40, 41-60, 60+",
+    category_fraud_rate: "Leave-one-out historical fraud rate for this category",
+    merchant_fraud_rate: "Leave-one-out historical fraud rate for this merchant",
+    amount_avg_category: "Average transaction amount for this category",
+    amount_stddev_category: "Standard deviation of amount for this category",
+    amount_zscore_category: "Z-score of amount relative to category average",
+    amount_avg_merchant: "Average transaction amount for this merchant",
+    amount_stddev_merchant: "Standard deviation of amount for this merchant",
+    amount_zscore_merchant: "Z-score of amount relative to merchant average",
+    is_fraud: "1 = fraud, 0 = legitimate transaction"
+  }
+}
+
+SELECT
+  trans_num,
+  trans_timestamp,
+  trans_hour,
+  trans_day_of_week,
+  IF(trans_day_of_week IN (6, 7), 1, 0)                        AS is_weekend,  
+  IF(trans_hour >= 22 OR trans_hour < 6, 1, 0)                 AS is_night,   
+  merchant,
+  category,
+  amount,
+  customer_city,
+  customer_state,
+  customer_location,
+  merchant_location,
+  ROUND(ST_DISTANCE(customer_location, merchant_location) / 1000, 2) AS distance_km,
+  city_population,
+  customer_job,
+  customer_age,
+  CASE
+    WHEN customer_age BETWEEN 18 AND 25 THEN '18-25'
+    WHEN customer_age BETWEEN 26 AND 40 THEN '26-40'
+    WHEN customer_age BETWEEN 41 AND 60 THEN '41-60'
+    WHEN customer_age > 60 THEN '60+'
+    ELSE 'unknown'
+  END                                                           AS customer_age_group,
+
+  --"עבור כל טרנזקציה, השדה הזה אומר "מתוך כל הטרנזקציות האחרות (בלעדיה) באותה קטגוריה , איזה אחוז מהן היו הונאה
+  --אם היינו מחשבים את הממוצע כולל השורה הנוכחית, היינו "מדליפים מידע" — השורה הייתה משפיעה על הממוצע של עצמה
+  SAFE_DIVIDE(
+    SUM(is_fraud) OVER (PARTITION BY category) - is_fraud,
+    COUNT(*) OVER (PARTITION BY category) - 1
+  )                                                             AS category_fraud_rate,
+
+  -- אותו דבר ברמת חנות
+  SAFE_DIVIDE(
+    SUM(is_fraud) OVER (PARTITION BY merchant) - is_fraud,
+    COUNT(*) OVER (PARTITION BY merchant) - 1
+  )                                                             AS merchant_fraud_rate,
+
+  -- סכום ממוצע לקטגוריה
+  AVG(amount) OVER (PARTITION BY category)                      AS amount_avg_category,
+  --סטיית תקן - מודד כמה "מפוזרים" הסכומים סביב הממוצע באותה קטגוריה. ככל שהערך גבוה יותר, כך יש יותר שונות בין הסכומים (יש גם קניות זעירות וגם ענקיות)
+  STDDEV(amount) OVER (PARTITION BY category)                   AS amount_stddev_category,
+  --כמה סטיות תקן הסכום הנוכחי רחוק מהממוצע של הקטגוריה שלו
+  SAFE_DIVIDE(
+    amount - AVG(amount) OVER (PARTITION BY category),
+    STDDEV(amount) OVER (PARTITION BY category)
+  )                                                             AS amount_zscore_category,
+
+  -- אותו דבר ברמת חנות
+  AVG(amount) OVER (PARTITION BY merchant)                      AS amount_avg_merchant,
+  STDDEV(amount) OVER (PARTITION BY merchant)                   AS amount_stddev_merchant,
+  SAFE_DIVIDE(
+    amount - AVG(amount) OVER (PARTITION BY merchant),
+    STDDEV(amount) OVER (PARTITION BY merchant)
+  )                                                             AS amount_zscore_merchant,
+  is_fraud
+FROM ${ref("stg_transactions")}
