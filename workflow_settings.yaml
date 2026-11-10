@@ -1,0 +1,4 @@
+defaultProject: fraud-detection-project-2026
+defaultDataset: dataform
+defaultAssertionDataset: dataform_assertions
+dataformCoreVersion: 3.0.52
