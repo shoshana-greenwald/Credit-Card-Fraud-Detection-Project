@@ -1,0 +1,37 @@
+config {
+  type: "table",
+  schema: "marts",
+  name: "agg_merchant_risk",
+  description: "Mart layer - merchant-level aggregation. Primary input for the Prioritization Agent and 'top risky merchants' dashboard view.",
+  bigquery: {
+    clusterBy: ["merchant"]
+  },
+  columns: {
+    merchant: "Merchant name",
+    total_transactions: "Total number of transactions for this merchant",
+    fraud_count: "Number of fraudulent transactions for this merchant",
+    fraud_rate_pct: "Fraud rate as a percentage",
+    avg_amount: "Average transaction amount for this merchant",
+    risk_level: "Risk classification: HIGH / MEDIUM / LOW / INSUFFICIENT_DATA (fewer than 30 transactions)"
+  }
+}
+
+SELECT
+  merchant,
+  COUNT(*)                                             AS total_transactions,
+  SUM(is_fraud)                                        AS fraud_count,
+  ROUND(SAFE_DIVIDE(SUM(is_fraud), COUNT(*)) * 100, 3) AS fraud_rate_pct,
+  ROUND(AVG(amount), 2)                                AS avg_amount,
+
+  -- Risk level with a minimum sample-size guard:
+  -- a merchant with only 2 transactions and 1 fraud would otherwise show "50% fraud rate",
+  -- which is statistically meaningless. We flag these separately instead of marking them HIGH.
+  CASE
+    WHEN COUNT(*) < 30 THEN 'INSUFFICIENT_DATA'
+    WHEN SAFE_DIVIDE(SUM(is_fraud), COUNT(*)) >= 0.05 THEN 'HIGH'
+    WHEN SAFE_DIVIDE(SUM(is_fraud), COUNT(*)) >= 0.02 THEN 'MEDIUM'
+    ELSE 'LOW'
+  END AS risk_level
+
+FROM ${ref("int_transactions_enriched")}
+GROUP BY merchant

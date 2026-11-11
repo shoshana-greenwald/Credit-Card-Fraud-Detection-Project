@@ -1,0 +1,30 @@
+config {
+  type: "table",
+  schema: "marts",
+  name: "agg_category_risk",
+  description: "Mart layer - category-level aggregation for dashboard widgets (e.g. 'riskiest categories' chart)",
+  bigquery: {
+    clusterBy: ["category"]
+  },
+  columns: {
+    category: "Transaction category",
+    total_transactions: "Total number of transactions in this category",
+    fraud_count: "Number of fraudulent transactions in this category",
+    fraud_rate_pct: "Fraud rate as a percentage",
+    avg_amount: "Average transaction amount",
+    avg_distance_km: "Average distance between customer and merchant",
+    pct_night_transactions: "Percentage of transactions occurring at night (22:00-06:00)"
+  }
+}
+
+SELECT
+  category,
+  COUNT(*)                                             AS total_transactions,
+  SUM(is_fraud)                                        AS fraud_count,
+  ROUND(SAFE_DIVIDE(SUM(is_fraud), COUNT(*)) * 100, 3) AS fraud_rate_pct,
+  ROUND(AVG(amount), 2)                                AS avg_amount,
+  ROUND(AVG(distance_km), 2)                           AS avg_distance_km,
+  ROUND(SAFE_DIVIDE(SUM(is_night), COUNT(*)) * 100, 2) AS pct_night_transactions
+
+FROM ${ref("int_transactions_enriched")}
+GROUP BY category

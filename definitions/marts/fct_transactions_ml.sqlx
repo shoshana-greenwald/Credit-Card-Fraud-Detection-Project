@@ -1,0 +1,70 @@
+config {
+  type: "table",
+  schema: "marts",
+  name: "fct_transactions_ml",
+  description: "Mart layer - flattened fact table ready for ML model training and for the Explanation Agent. One row per transaction, all engineered features included.",
+  bigquery: {
+    partitionBy: "DATE(trans_timestamp)",
+    clusterBy: ["category", "merchant"]
+  },
+  columns: {
+    trans_num: "Unique transaction identifier (Primary Key) - used to join model predictions back",
+    trans_timestamp: "Date and time of the transaction",
+    trans_hour: "Hour of day (0-23)",
+    trans_day_of_week: "Day of week (1=Sunday, 7=Saturday)",
+    is_weekend: "1 if Friday/Saturday, else 0",
+    is_night: "1 if transaction occurred 22:00-06:00, else 0",
+    merchant: "Merchant name",
+    category: "Transaction category",
+    amount: "Transaction amount",
+    customer_city: "Customer's city",
+    customer_state: "Customer's state",
+    distance_km: "Distance in km between customer and merchant",
+    city_population: "Population of customer's city",
+    customer_job: "Customer's job title",
+    customer_age: "Customer age at time of transaction",
+    customer_age_group: "Age bucket: 18-25, 26-40, 41-60, 60+",
+    category_fraud_rate: "Leave-one-out historical fraud rate for this category",
+    merchant_fraud_rate: "Leave-one-out historical fraud rate for this merchant",
+    amount_zscore_category: "Z-score of amount relative to category average",
+    amount_zscore_merchant: "Z-score of amount relative to merchant average",
+    heuristic_risk_level: "Naive rule-based risk flag (LOW/MEDIUM/HIGH) - placeholder until ML model is trained; used by Prioritization Agent in early development",
+    is_fraud: "Label: 1 = fraud, 0 = legitimate"
+  }
+}
+
+SELECT
+  trans_num,
+  trans_timestamp,
+  trans_hour,
+  trans_day_of_week,
+  is_weekend,
+  is_night,
+  merchant,
+  category,
+  amount,
+  customer_city,
+  customer_state,
+  distance_km,
+  city_population,
+  customer_job,
+  customer_age,
+  customer_age_group,
+  category_fraud_rate,
+  merchant_fraud_rate,
+  amount_zscore_category,
+  amount_zscore_merchant,
+
+  -- Naive risk flag (rule-based, NOT a model prediction)
+  -- Purpose: allows the dashboard and the Prioritization Agent to function
+  -- even before the ML model exists. Should be replaced by actual model
+  -- scores once `ml.fraud_model` is deployed.
+  CASE
+    WHEN merchant_fraud_rate >= 0.004 OR category_fraud_rate >= 0.004 THEN 'HIGH'
+    WHEN ABS(amount_zscore_merchant) >= 0.5 OR ABS(amount_zscore_category) >= 0.5 THEN 'MEDIUM'
+    ELSE 'LOW'
+  END AS heuristic_risk_level,
+
+  is_fraud
+
+FROM ${ref("int_transactions_enriched")}
